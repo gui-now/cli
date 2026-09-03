@@ -3,7 +3,7 @@
 import { readFileSync } from 'fs'
 import { exec } from 'child_process'
 
-const API_URL = 'https://gui.new/api/canvas'
+const API_URL = 'https://gui.now/api/canvas'
 const isTTY = process.stdout.isTTY ?? false
 
 // Simple ANSI colors (only when TTY)
@@ -14,7 +14,7 @@ const bold = (s: string) => (isTTY ? `\x1b[1m${s}\x1b[0m` : s)
 
 function printHelp() {
   console.log(`
-${bold('gui')} — pipe HTML to gui.new, get a shareable URL
+${bold('gui')} — pipe HTML to gui.now, get a shareable URL
 
 ${bold('USAGE')}
   gui push [file] [options]    Create a canvas
@@ -36,7 +36,7 @@ ${bold('OPTIONS')}
   -h, --help              Show help
 
 ${bold('ENVIRONMENT')}
-  GUI_NEW_API_KEY          Pro API key for higher limits
+  GUI_NOW_API_KEY          Pro API key for higher limits
 `)
 }
 
@@ -162,7 +162,7 @@ async function createCanvas(content: string, opts: { title?: string; expires?: s
   if (opts.expires) body.expires = opts.expires
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const apiKey = process.env.GUI_NEW_API_KEY
+  const apiKey = process.env.GUI_NOW_API_KEY
   if (apiKey) headers['x-api-key'] = apiKey
 
   const res = await fetch(API_URL, {
@@ -203,8 +203,8 @@ async function main() {
       console.error(red('Error: gui open requires a canvas ID'))
       process.exit(1)
     }
-    openUrl(`https://gui.new/${opts.id}`)
-    console.log(dim(`Opening https://gui.new/${opts.id}`))
+    openUrl(`https://gui.now/${opts.id}`)
+    console.log(dim(`Opening https://gui.now/${opts.id}`))
     process.exit(0)
   }
 
