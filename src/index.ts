@@ -162,7 +162,9 @@ async function createCanvas(content: string, opts: { title?: string; expires?: s
   if (opts.expires) body.expires = opts.expires
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const apiKey = process.env.GUI_NOW_API_KEY
+  // GUI_NEW_API_KEY is the pre-rename name; still honoured so existing Pro
+  // keys keep working without the user having to re-export anything.
+  const apiKey = process.env.GUI_NOW_API_KEY || process.env.GUI_NEW_API_KEY
   if (apiKey) headers['x-api-key'] = apiKey
 
   const res = await fetch(API_URL, {

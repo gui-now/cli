@@ -130,7 +130,7 @@ async function createCanvas(content, opts) {
     if (opts.expires)
         body.expires = opts.expires;
     const headers = { 'Content-Type': 'application/json' };
-    const apiKey = process.env.GUI_NOW_API_KEY;
+    const apiKey = process.env.GUI_NOW_API_KEY || process.env.GUI_NEW_API_KEY;
     if (apiKey)
         headers['x-api-key'] = apiKey;
     const res = await fetch(API_URL, {
