@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'fs'
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 
 const API_URL = 'https://gui.now/api/canvas'
 const isTTY = process.stdout.isTTY ?? false
@@ -131,13 +131,17 @@ function readStdin(): Promise<string> {
 }
 
 function openUrl(url: string) {
-  const cmd =
-    process.platform === 'darwin'
-      ? 'open'
-      : process.platform === 'win32'
-        ? 'start'
-        : 'xdg-open'
-  exec(`${cmd} ${url}`)
+  // execFile, not exec: the URL can carry a canvas id straight from argv, and
+  // interpolating that into a shell string lets `gui open '$(...)'` run it.
+  if (process.platform === 'darwin') {
+    execFile('open', [url])
+  } else if (process.platform === 'win32') {
+    // `start` is a cmd.exe builtin, so it needs a shell to live in. The empty
+    // string is the window title cmd would otherwise take the URL to be.
+    execFile('cmd', ['/c', 'start', '', url])
+  } else {
+    execFile('xdg-open', [url])
+  }
 }
 
 interface ApiResponse {

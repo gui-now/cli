@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'fs';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 const API_URL = 'https://gui.now/api/canvas';
 const isTTY = process.stdout.isTTY ?? false;
 // Simple ANSI colors (only when TTY)
@@ -110,12 +110,19 @@ function readStdin() {
     });
 }
 function openUrl(url) {
-    const cmd = process.platform === 'darwin'
-        ? 'open'
-        : process.platform === 'win32'
-            ? 'start'
-            : 'xdg-open';
-    exec(`${cmd} ${url}`);
+    // execFile, not exec: the URL can carry a canvas id straight from argv, and
+    // interpolating that into a shell string lets `gui open '$(...)'` run it.
+    if (process.platform === 'darwin') {
+        execFile('open', [url]);
+    }
+    else if (process.platform === 'win32') {
+        // `start` is a cmd.exe builtin, so it needs a shell to live in. The empty
+        // string is the window title cmd would otherwise take the URL to be.
+        execFile('cmd', ['/c', 'start', '', url]);
+    }
+    else {
+        execFile('xdg-open', [url]);
+    }
 }
 async function createCanvas(content, opts) {
     const body = {};
@@ -130,6 +137,8 @@ async function createCanvas(content, opts) {
     if (opts.expires)
         body.expires = opts.expires;
     const headers = { 'Content-Type': 'application/json' };
+    // GUI_NEW_API_KEY is the pre-rename name; still honoured so existing Pro
+    // keys keep working without the user having to re-export anything.
     const apiKey = process.env.GUI_NOW_API_KEY || process.env.GUI_NEW_API_KEY;
     if (apiKey)
         headers['x-api-key'] = apiKey;
