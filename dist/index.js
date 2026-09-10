@@ -99,14 +99,38 @@ function parseArgs(argv) {
 }
 function readStdin() {
     return new Promise((resolve, reject) => {
-        const chunks = [];
-        process.stdin.on('data', (chunk) => chunks.push(chunk));
-        process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        process.stdin.on('error', reject);
-        // Timeout after 100ms if no data (not piped)
+        // An interactive terminal means nothing is being piped in.
         if (process.stdin.isTTY) {
             resolve('');
+            return;
         }
+        const chunks = [];
+        let sawData = false;
+        // stdin can be an open pipe with no writer, in which case 'end' never
+        // fires and we wait forever. A timeout would fix the hang but would also
+        // truncate a slow producer, which is worse -- `slow-command | gui push`
+        // is legitimate and may take seconds to emit its first byte. So keep
+        // waiting, but say so, and only on a terminal where it will not pollute
+        // piped output.
+        const hint = setTimeout(() => {
+            if (!sawData && isTTY) {
+                console.error(dim('Waiting for input on stdin... (Ctrl-C to cancel)'));
+            }
+        }, 2000);
+        hint.unref();
+        process.stdin.on('data', (chunk) => {
+            sawData = true;
+            clearTimeout(hint);
+            chunks.push(chunk);
+        });
+        process.stdin.on('end', () => {
+            clearTimeout(hint);
+            resolve(Buffer.concat(chunks).toString('utf-8'));
+        });
+        process.stdin.on('error', (err) => {
+            clearTimeout(hint);
+            reject(err);
+        });
     });
 }
 function openUrl(url) {
@@ -188,7 +212,13 @@ async function main() {
             }
         }
         else {
-            content = await readStdin();
+            try {
+                content = await readStdin();
+            }
+            catch (err) {
+                console.error(red(`Error: Cannot read stdin — ${err.message}`));
+                process.exit(1);
+            }
         }
         if (!content.trim()) {
             console.error(red('Error: No content provided. Pipe HTML or pass a file.'));
