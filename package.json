@@ -1,18 +1,28 @@
 {
-  "name": "gui-new-cli",
+  "name": "gui-now-cli",
   "version": "1.0.0",
-  "description": "CLI for gui.new — pipe HTML to get a shareable URL",
+  "description": "CLI for gui.now \u2014 pipe HTML to get a shareable URL",
   "type": "module",
   "bin": {
     "gui": "dist/index.js"
   },
   "main": "dist/index.js",
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js"
   },
-  "keywords": ["gui-new", "html", "canvas", "sharing", "cli"],
+  "keywords": [
+    "gui-now",
+    "html",
+    "canvas",
+    "sharing",
+    "cli"
+  ],
   "license": "MIT",
   "devDependencies": {
     "typescript": "^5.7.0",
@@ -20,5 +30,13 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gui-now/cli.git"
+  },
+  "homepage": "https://gui.now",
+  "bugs": {
+    "url": "https://github.com/gui-now/cli/issues"
   }
 }

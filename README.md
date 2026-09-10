@@ -1,17 +1,17 @@
-# gui-new-cli
+# gui-now-cli
 
-CLI for [gui.new](https://gui.new) — pipe HTML to get a shareable URL.
+CLI for [gui.now](https://gui.now) — pipe HTML to get a shareable URL.
 
 ## Install
 
 ```bash
-npm install -g gui-new-cli
+npm install -g gui-now-cli
 ```
 
 Or use directly:
 
 ```bash
-npx gui-new-cli push index.html
+npx gui-now-cli push index.html
 ```
 
 ## Usage
@@ -57,7 +57,7 @@ gui open abc123
 
 | Variable | Description |
 |----------|-------------|
-| `GUI_NEW_API_KEY` | Pro API key for higher rate limits (100/hr vs 5/hr) and longer expiry |
+| `GUI_NOW_API_KEY` | Pro API key for higher rate limits (100/hr vs 5/hr) and longer expiry |
 
 ## Requirements
 

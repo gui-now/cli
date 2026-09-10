@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'fs';
-import { exec } from 'child_process';
-const API_URL = 'https://gui.new/api/canvas';
+import { execFile } from 'child_process';
+const API_URL = 'https://gui.now/api/canvas';
 const isTTY = process.stdout.isTTY ?? false;
 // Simple ANSI colors (only when TTY)
 const green = (s) => (isTTY ? `\x1b[32m${s}\x1b[0m` : s);
@@ -10,7 +10,7 @@ const dim = (s) => (isTTY ? `\x1b[2m${s}\x1b[0m` : s);
 const bold = (s) => (isTTY ? `\x1b[1m${s}\x1b[0m` : s);
 function printHelp() {
     console.log(`
-${bold('gui')} — pipe HTML to gui.new, get a shareable URL
+${bold('gui')} — pipe HTML to gui.now, get a shareable URL
 
 ${bold('USAGE')}
   gui push [file] [options]    Create a canvas
@@ -32,7 +32,7 @@ ${bold('OPTIONS')}
   -h, --help              Show help
 
 ${bold('ENVIRONMENT')}
-  GUI_NEW_API_KEY          Pro API key for higher limits
+  GUI_NOW_API_KEY          Pro API key for higher limits
 `);
 }
 function parseArgs(argv) {
@@ -99,23 +99,54 @@ function parseArgs(argv) {
 }
 function readStdin() {
     return new Promise((resolve, reject) => {
-        const chunks = [];
-        process.stdin.on('data', (chunk) => chunks.push(chunk));
-        process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        process.stdin.on('error', reject);
-        // Timeout after 100ms if no data (not piped)
+        // An interactive terminal means nothing is being piped in.
         if (process.stdin.isTTY) {
             resolve('');
+            return;
         }
+        const chunks = [];
+        let sawData = false;
+        // stdin can be an open pipe with no writer, in which case 'end' never
+        // fires and we wait forever. A timeout would fix the hang but would also
+        // truncate a slow producer, which is worse -- `slow-command | gui push`
+        // is legitimate and may take seconds to emit its first byte. So keep
+        // waiting, but say so, and only on a terminal where it will not pollute
+        // piped output.
+        const hint = setTimeout(() => {
+            if (!sawData && isTTY) {
+                console.error(dim('Waiting for input on stdin... (Ctrl-C to cancel)'));
+            }
+        }, 2000);
+        hint.unref();
+        process.stdin.on('data', (chunk) => {
+            sawData = true;
+            clearTimeout(hint);
+            chunks.push(chunk);
+        });
+        process.stdin.on('end', () => {
+            clearTimeout(hint);
+            resolve(Buffer.concat(chunks).toString('utf-8'));
+        });
+        process.stdin.on('error', (err) => {
+            clearTimeout(hint);
+            reject(err);
+        });
     });
 }
 function openUrl(url) {
-    const cmd = process.platform === 'darwin'
-        ? 'open'
-        : process.platform === 'win32'
-            ? 'start'
-            : 'xdg-open';
-    exec(`${cmd} ${url}`);
+    // execFile, not exec: the URL can carry a canvas id straight from argv, and
+    // interpolating that into a shell string lets `gui open '$(...)'` run it.
+    if (process.platform === 'darwin') {
+        execFile('open', [url]);
+    }
+    else if (process.platform === 'win32') {
+        // `start` is a cmd.exe builtin, so it needs a shell to live in. The empty
+        // string is the window title cmd would otherwise take the URL to be.
+        execFile('cmd', ['/c', 'start', '', url]);
+    }
+    else {
+        execFile('xdg-open', [url]);
+    }
 }
 async function createCanvas(content, opts) {
     const body = {};
@@ -130,7 +161,9 @@ async function createCanvas(content, opts) {
     if (opts.expires)
         body.expires = opts.expires;
     const headers = { 'Content-Type': 'application/json' };
-    const apiKey = process.env.GUI_NEW_API_KEY;
+    // GUI_NEW_API_KEY is the pre-rename name; still honoured so existing Pro
+    // keys keep working without the user having to re-export anything.
+    const apiKey = process.env.GUI_NOW_API_KEY || process.env.GUI_NEW_API_KEY;
     if (apiKey)
         headers['x-api-key'] = apiKey;
     const res = await fetch(API_URL, {
@@ -163,8 +196,8 @@ async function main() {
             console.error(red('Error: gui open requires a canvas ID'));
             process.exit(1);
         }
-        openUrl(`https://gui.new/${opts.id}`);
-        console.log(dim(`Opening https://gui.new/${opts.id}`));
+        openUrl(`https://gui.now/${opts.id}`);
+        console.log(dim(`Opening https://gui.now/${opts.id}`));
         process.exit(0);
     }
     if (opts.command === 'push') {
@@ -179,7 +212,13 @@ async function main() {
             }
         }
         else {
-            content = await readStdin();
+            try {
+                content = await readStdin();
+            }
+            catch (err) {
+                console.error(red(`Error: Cannot read stdin — ${err.message}`));
+                process.exit(1);
+            }
         }
         if (!content.trim()) {
             console.error(red('Error: No content provided. Pipe HTML or pass a file.'));
