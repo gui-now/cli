@@ -1,5 +1,5 @@
 {
-  "name": "gui-now-cli",
+  "name": "gui-now",
   "version": "1.0.0",
   "description": "CLI for gui.now \u2014 pipe HTML to get a shareable URL",
   "type": "module",
