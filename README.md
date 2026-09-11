@@ -1,17 +1,17 @@
-# gui-now-cli
+# gui-now
 
 CLI for [GUI](https://gui.now) — pipe HTML to get a shareable URL.
 
 ## Install
 
 ```bash
-npm install -g gui-now-cli
+npm install -g gui-now
 ```
 
 Or use directly:
 
 ```bash
-npx gui-now-cli push index.html
+npx gui-now push index.html
 ```
 
 ## Usage
