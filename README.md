@@ -1,6 +1,6 @@
 # gui-now-cli
 
-CLI for [gui.now](https://gui.now) — pipe HTML to get a shareable URL.
+CLI for [GUI](https://gui.now) — pipe HTML to get a shareable URL.
 
 ## Install
 
