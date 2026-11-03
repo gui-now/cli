@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from 'fs';
 import { execFile } from 'child_process';
-const API_URL = 'https://gui.now/api/canvas';
+import { configFromEnv, createCanvas, extendCanvas, GuiError } from './api.js';
+const config = configFromEnv();
 const isTTY = process.stdout.isTTY ?? false;
 // Simple ANSI colors (only when TTY)
 const green = (s) => (isTTY ? `\x1b[32m${s}\x1b[0m` : s);
@@ -14,6 +15,7 @@ ${bold('gui')} — pipe HTML to gui.now, get a shareable URL
 
 ${bold('USAGE')}
   gui push [file] [options]    Create a canvas
+  gui extend <id> [options]    Push a canvas's expiry forward
   gui open <id>                Open a canvas in the browser
   gui help                     Show this help
 
@@ -22,17 +24,28 @@ ${bold('EXAMPLES')}
   gui push index.html --title "My Dashboard"
   gui push --markdown README.md
   echo "<h1>Hello</h1>" | gui push --open
+  gui extend abc123
+  gui extend abc123 --token <edit_token> --expires 7d
 
 ${bold('OPTIONS')}
   -t, --title <title>     Canvas title
-  -e, --expires <dur>     Expiry: 1h, 24h, 7d, 14d, 30d
+  -e, --expires <dur>     Expiry like 30m, 24h, 7d, or never. Capped by plan:
+                          no account 72h, free account 7d, Pro key no limit
   -m, --markdown          Treat input as markdown
+  -a, --agent <name>      Agent publishing the page, shown in the library
   -o, --open              Open URL in browser after creation
   -j, --json              Output full JSON response
   -h, --help              Show help
 
+${bold('EXTEND')}
+  Without --token, extend adds 24h (pages without an owner stop at 72h after
+  creation). With the page's edit token, --expires sets a new expiry from now.
+  --token <edit_token>    The edit_token from gui push --json
+
 ${bold('ENVIRONMENT')}
   GUI_NOW_API_KEY          Pro API key for higher limits
+  GUI_NOW_AGENT            Default for --agent
+  GUI_NOW_BASE_URL         API base URL (default https://gui.now)
 `);
 }
 function parseArgs(argv) {
@@ -41,6 +54,8 @@ function parseArgs(argv) {
         file: undefined,
         title: undefined,
         expires: undefined,
+        agent: undefined,
+        token: undefined,
         markdown: false,
         json: false,
         open: false,
@@ -65,6 +80,13 @@ function parseArgs(argv) {
             case '--expires':
                 result.expires = args[++i];
                 break;
+            case '-a':
+            case '--agent':
+                result.agent = args[++i];
+                break;
+            case '--token':
+                result.token = args[++i];
+                break;
             case '-m':
             case '--markdown':
                 result.markdown = true;
@@ -83,8 +105,8 @@ function parseArgs(argv) {
                 break;
             default:
                 // Positional: file or id
-                if (!result.file && !arg.startsWith('-')) {
-                    if (result.command === 'open') {
+                if (!result.file && !result.id && !arg.startsWith('-')) {
+                    if (result.command === 'open' || result.command === 'extend') {
                         result.id = arg;
                     }
                     else {
@@ -148,38 +170,15 @@ function openUrl(url) {
         execFile('xdg-open', [url]);
     }
 }
-async function createCanvas(content, opts) {
-    const body = {};
-    if (opts.markdown) {
-        body.markdown = content;
+function formatExpiry(expiresAt) {
+    return expiresAt === null ? 'never expires' : `expires ${expiresAt}`;
+}
+function fail(err) {
+    console.error(red(`Error: ${err.message}`));
+    if (err instanceof GuiError && err.maxExpiresAt) {
+        console.error(dim(`This page can't be extended past ${err.maxExpiresAt}. Claim it or use a Pro key to keep it longer.`));
     }
-    else {
-        body.html = content;
-    }
-    if (opts.title)
-        body.title = opts.title;
-    if (opts.expires)
-        body.expires = opts.expires;
-    const headers = { 'Content-Type': 'application/json' };
-    // GUI_NEW_API_KEY is the pre-rename name; still honoured so existing Pro
-    // keys keep working without the user having to re-export anything.
-    const apiKey = process.env.GUI_NOW_API_KEY || process.env.GUI_NEW_API_KEY;
-    if (apiKey)
-        headers['x-api-key'] = apiKey;
-    const res = await fetch(API_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-    });
-    if (res.status === 429) {
-        const retryAfter = res.headers.get('Retry-After') || '3600';
-        throw new Error(`Rate limited. Try again in ${retryAfter} seconds.`);
-    }
-    const data = (await res.json());
-    if (!res.ok) {
-        throw new Error(data.error || `API error (${res.status})`);
-    }
-    return data;
+    process.exit(1);
 }
 async function main() {
     const opts = parseArgs(process.argv);
@@ -196,8 +195,30 @@ async function main() {
             console.error(red('Error: gui open requires a canvas ID'));
             process.exit(1);
         }
-        openUrl(`https://gui.now/${opts.id}`);
-        console.log(dim(`Opening https://gui.now/${opts.id}`));
+        const url = `${config.baseUrl}/${encodeURIComponent(opts.id)}`;
+        openUrl(url);
+        console.log(dim(`Opening ${url}`));
+        process.exit(0);
+    }
+    if (opts.command === 'extend') {
+        if (!opts.id) {
+            console.error(red('Error: gui extend requires a canvas ID'));
+            process.exit(1);
+        }
+        try {
+            const data = await extendCanvas(config, opts.id, { token: opts.token, expires: opts.expires });
+            if (opts.json) {
+                console.log(JSON.stringify(data, null, 2));
+            }
+            else {
+                console.log(formatExpiry(data.expires_at));
+                if (data.expires_clamped)
+                    console.error(dim('Capped at the longest expiry this page allows.'));
+            }
+        }
+        catch (err) {
+            fail(err);
+        }
         process.exit(0);
     }
     if (opts.command === 'push') {
@@ -227,18 +248,24 @@ async function main() {
             process.exit(1);
         }
         try {
-            const data = await createCanvas(content, {
+            const data = await createCanvas(config, content, {
                 title: opts.title,
                 expires: opts.expires,
                 markdown: opts.markdown,
+                agent: opts.agent || process.env.GUI_NOW_AGENT || undefined,
             });
             if (opts.json) {
                 console.log(JSON.stringify(data, null, 2));
             }
             else {
+                // stdout carries only the URL so `gui push | pbcopy` keeps working.
+                // Everything else goes to stderr, which agents running the CLI still see.
                 console.log(green(data.url));
-                if (isTTY) {
-                    console.log(dim(`expires ${data.expires_at}`));
+                console.error(dim(formatExpiry(data.expires_at)));
+                if (data.expires_clamped)
+                    console.error(dim('Expiry capped at the longest your plan allows.'));
+                if (data.claim_url) {
+                    console.error(`Keep this page: open ${data.claim_url} to sign in and save it to your library. The link works once.`);
                 }
             }
             if (opts.open) {
@@ -246,8 +273,7 @@ async function main() {
             }
         }
         catch (err) {
-            console.error(red(`Error: ${err.message}`));
-            process.exit(1);
+            fail(err);
         }
     }
     else {
