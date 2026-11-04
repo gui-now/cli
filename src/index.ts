@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'fs'
+import { createInterface } from 'readline'
 import { execFile } from 'child_process'
+import { configFromEnv, createCanvas, deleteCanvas, extendCanvas, GuiError } from './api.js'
 
-const API_URL = 'https://gui.now/api/canvas'
+const config = configFromEnv()
 const isTTY = process.stdout.isTTY ?? false
 
 // Simple ANSI colors (only when TTY)
@@ -18,6 +20,8 @@ ${bold('gui')} — pipe HTML to gui.now, get a shareable URL
 
 ${bold('USAGE')}
   gui push [file] [options]    Create a canvas
+  gui extend <id> [options]    Push a canvas's expiry forward
+  gui delete <id> [options]    Delete a canvas for good
   gui open <id>                Open a canvas in the browser
   gui help                     Show this help
 
@@ -26,17 +30,35 @@ ${bold('EXAMPLES')}
   gui push index.html --title "My Dashboard"
   gui push --markdown README.md
   echo "<h1>Hello</h1>" | gui push --open
+  gui extend abc123
+  gui extend abc123 --token <edit_token> --expires 7d
+  gui delete abc123 --token <edit_token>
 
 ${bold('OPTIONS')}
   -t, --title <title>     Canvas title
-  -e, --expires <dur>     Expiry: 1h, 24h, 7d, 14d, 30d
+  -e, --expires <dur>     Expiry like 30m, 24h, 7d, or never. Capped by plan:
+                          no account 72h, free account 7d, Pro key no limit
   -m, --markdown          Treat input as markdown
+  -a, --agent <name>      Agent publishing the page, shown in the library
   -o, --open              Open URL in browser after creation
   -j, --json              Output full JSON response
   -h, --help              Show help
 
+${bold('EXTEND')}
+  Without --token, extend adds 24h (pages without an owner stop at 72h after
+  creation). With the page's edit token, --expires sets a new expiry from now.
+  --token <edit_token>    The edit_token from gui push --json
+
+${bold('DELETE')}
+  Removes the page and its saved input; the URL returns 404 afterwards and
+  there is no undo. Send --token, or set GUI_NOW_API_KEY to a gui_live_ key
+  of the page's owner. On a terminal it asks first; elsewhere pass --yes.
+  -y, --yes               Delete without asking
+
 ${bold('ENVIRONMENT')}
-  GUI_NOW_API_KEY          Pro API key for higher limits
+  GUI_NOW_API_KEY          Pro or gui_live_ account key
+  GUI_NOW_AGENT            Default for --agent
+  GUI_NOW_BASE_URL         API base URL (default https://gui.now)
 `)
 }
 
@@ -45,9 +67,12 @@ function parseArgs(argv: string[]): {
   file?: string
   title?: string
   expires?: string
+  agent?: string
+  token?: string
   markdown: boolean
   json: boolean
   open: boolean
+  yes: boolean
   help: boolean
   id?: string
 } {
@@ -56,9 +81,12 @@ function parseArgs(argv: string[]): {
     file: undefined as string | undefined,
     title: undefined as string | undefined,
     expires: undefined as string | undefined,
+    agent: undefined as string | undefined,
+    token: undefined as string | undefined,
     markdown: false,
     json: false,
     open: false,
+    yes: false,
     help: false,
     id: undefined as string | undefined,
   }
@@ -83,6 +111,13 @@ function parseArgs(argv: string[]): {
       case '--expires':
         result.expires = args[++i]
         break
+      case '-a':
+      case '--agent':
+        result.agent = args[++i]
+        break
+      case '--token':
+        result.token = args[++i]
+        break
       case '-m':
       case '--markdown':
         result.markdown = true
@@ -95,14 +130,18 @@ function parseArgs(argv: string[]): {
       case '--open':
         result.open = true
         break
+      case '-y':
+      case '--yes':
+        result.yes = true
+        break
       case '-h':
       case '--help':
         result.help = true
         break
       default:
         // Positional: file or id
-        if (!result.file && !arg.startsWith('-')) {
-          if (result.command === 'open') {
+        if (!result.file && !result.id && !arg.startsWith('-')) {
+          if (result.command === 'open' || result.command === 'extend' || result.command === 'delete') {
             result.id = arg
           } else {
             result.file = arg
@@ -170,51 +209,28 @@ function openUrl(url: string) {
   }
 }
 
-interface ApiResponse {
-  id: string
-  url: string
-  edit_token: string
-  expires_at: string
-  pro: boolean
-  format: string
-  error?: string
+function formatExpiry(expiresAt: string | null): string {
+  return expiresAt === null ? 'never expires' : `expires ${expiresAt}`
 }
 
-async function createCanvas(content: string, opts: { title?: string; expires?: string; markdown: boolean }): Promise<ApiResponse> {
-  const body: Record<string, string> = {}
-
-  if (opts.markdown) {
-    body.markdown = content
-  } else {
-    body.html = content
-  }
-  if (opts.title) body.title = opts.title
-  if (opts.expires) body.expires = opts.expires
-
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  // GUI_NEW_API_KEY is the pre-rename name; still honoured so existing Pro
-  // keys keep working without the user having to re-export anything.
-  const apiKey = process.env.GUI_NOW_API_KEY || process.env.GUI_NEW_API_KEY
-  if (apiKey) headers['x-api-key'] = apiKey
-
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
+// Asks on the terminal; false for anything but y/yes.
+function confirm(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stderr })
+    rl.question(question, (answer) => {
+      rl.close()
+      resolve(/^y(es)?$/i.test(answer.trim()))
+    })
   })
+}
 
-  if (res.status === 429) {
-    const retryAfter = res.headers.get('Retry-After') || '3600'
-    throw new Error(`Rate limited. Try again in ${retryAfter} seconds.`)
+function fail(err: unknown, hint404?: string): never {
+  console.error(red(`Error: ${(err as Error).message}`))
+  if (hint404 && err instanceof GuiError && err.status === 404) console.error(dim(hint404))
+  if (err instanceof GuiError && err.maxExpiresAt) {
+    console.error(dim(`This page can't be extended past ${err.maxExpiresAt}. Claim it or use a Pro key to keep it longer.`))
   }
-
-  const data = (await res.json()) as ApiResponse
-
-  if (!res.ok) {
-    throw new Error(data.error || `API error (${res.status})`)
-  }
-
-  return data
+  process.exit(1)
 }
 
 async function main() {
@@ -235,8 +251,54 @@ async function main() {
       console.error(red('Error: gui open requires a canvas ID'))
       process.exit(1)
     }
-    openUrl(`https://gui.now/${opts.id}`)
-    console.log(dim(`Opening https://gui.now/${opts.id}`))
+    const url = `${config.baseUrl}/${encodeURIComponent(opts.id)}`
+    openUrl(url)
+    console.log(dim(`Opening ${url}`))
+    process.exit(0)
+  }
+
+  if (opts.command === 'extend') {
+    if (!opts.id) {
+      console.error(red('Error: gui extend requires a canvas ID'))
+      process.exit(1)
+    }
+    try {
+      const data = await extendCanvas(config, opts.id, { token: opts.token, expires: opts.expires })
+      if (opts.json) {
+        console.log(JSON.stringify(data, null, 2))
+      } else {
+        console.log(formatExpiry(data.expires_at))
+        if (data.expires_clamped) console.error(dim('Capped at the longest expiry this page allows.'))
+      }
+    } catch (err) {
+      fail(err)
+    }
+    process.exit(0)
+  }
+
+  if (opts.command === 'delete') {
+    if (!opts.id) {
+      console.error(red('Error: gui delete requires a canvas ID'))
+      process.exit(1)
+    }
+    if (!opts.yes) {
+      // Only ask a person. A script or agent has to say --yes, so a delete
+      // never happens because nothing was there to answer.
+      if (!process.stdin.isTTY || !process.stderr.isTTY) {
+        console.error(red('Error: gui delete needs --yes when it is not run from a terminal'))
+        process.exit(1)
+      }
+      if (!(await confirm(`Delete ${opts.id} for good? This can't be undone. [y/N] `))) {
+        console.error(dim('Not deleted.'))
+        process.exit(1)
+      }
+    }
+    try {
+      const data = await deleteCanvas(config, opts.id, { token: opts.token })
+      console.log(opts.json ? JSON.stringify(data, null, 2) : `Deleted ${data.id}`)
+    } catch (err) {
+      fail(err, "No page with that ID, or the token or key doesn't match it.")
+    }
     process.exit(0)
   }
 
@@ -267,18 +329,23 @@ async function main() {
     }
 
     try {
-      const data = await createCanvas(content, {
+      const data = await createCanvas(config, content, {
         title: opts.title,
         expires: opts.expires,
         markdown: opts.markdown,
+        agent: opts.agent || process.env.GUI_NOW_AGENT || undefined,
       })
 
       if (opts.json) {
         console.log(JSON.stringify(data, null, 2))
       } else {
+        // stdout carries only the URL so `gui push | pbcopy` keeps working.
+        // Everything else goes to stderr, which agents running the CLI still see.
         console.log(green(data.url))
-        if (isTTY) {
-          console.log(dim(`expires ${data.expires_at}`))
+        console.error(dim(formatExpiry(data.expires_at)))
+        if (data.expires_clamped) console.error(dim('Expiry capped at the longest your plan allows.'))
+        if (data.claim_url) {
+          console.error(`Keep this page: open ${data.claim_url} to sign in and save it to your library. The link works once.`)
         }
       }
 
@@ -286,8 +353,7 @@ async function main() {
         openUrl(data.url)
       }
     } catch (err) {
-      console.error(red(`Error: ${(err as Error).message}`))
-      process.exit(1)
+      fail(err)
     }
   } else {
     console.error(red(`Unknown command: ${opts.command}`))
