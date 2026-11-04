@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from 'fs';
+import { createInterface } from 'readline';
 import { execFile } from 'child_process';
-import { configFromEnv, createCanvas, extendCanvas, GuiError } from './api.js';
+import { configFromEnv, createCanvas, deleteCanvas, extendCanvas, GuiError } from './api.js';
 const config = configFromEnv();
 const isTTY = process.stdout.isTTY ?? false;
 // Simple ANSI colors (only when TTY)
@@ -16,6 +17,7 @@ ${bold('gui')} — pipe HTML to gui.now, get a shareable URL
 ${bold('USAGE')}
   gui push [file] [options]    Create a canvas
   gui extend <id> [options]    Push a canvas's expiry forward
+  gui delete <id> [options]    Delete a canvas for good
   gui open <id>                Open a canvas in the browser
   gui help                     Show this help
 
@@ -26,6 +28,7 @@ ${bold('EXAMPLES')}
   echo "<h1>Hello</h1>" | gui push --open
   gui extend abc123
   gui extend abc123 --token <edit_token> --expires 7d
+  gui delete abc123 --token <edit_token>
 
 ${bold('OPTIONS')}
   -t, --title <title>     Canvas title
@@ -42,8 +45,14 @@ ${bold('EXTEND')}
   creation). With the page's edit token, --expires sets a new expiry from now.
   --token <edit_token>    The edit_token from gui push --json
 
+${bold('DELETE')}
+  Removes the page and its saved input; the URL returns 404 afterwards and
+  there is no undo. Send --token, or set GUI_NOW_API_KEY to a gui_live_ key
+  of the page's owner. On a terminal it asks first; elsewhere pass --yes.
+  -y, --yes               Delete without asking
+
 ${bold('ENVIRONMENT')}
-  GUI_NOW_API_KEY          Pro API key for higher limits
+  GUI_NOW_API_KEY          Pro or gui_live_ account key
   GUI_NOW_AGENT            Default for --agent
   GUI_NOW_BASE_URL         API base URL (default https://gui.now)
 `);
@@ -59,6 +68,7 @@ function parseArgs(argv) {
         markdown: false,
         json: false,
         open: false,
+        yes: false,
         help: false,
         id: undefined,
     };
@@ -99,6 +109,10 @@ function parseArgs(argv) {
             case '--open':
                 result.open = true;
                 break;
+            case '-y':
+            case '--yes':
+                result.yes = true;
+                break;
             case '-h':
             case '--help':
                 result.help = true;
@@ -106,7 +120,7 @@ function parseArgs(argv) {
             default:
                 // Positional: file or id
                 if (!result.file && !result.id && !arg.startsWith('-')) {
-                    if (result.command === 'open' || result.command === 'extend') {
+                    if (result.command === 'open' || result.command === 'extend' || result.command === 'delete') {
                         result.id = arg;
                     }
                     else {
@@ -173,8 +187,20 @@ function openUrl(url) {
 function formatExpiry(expiresAt) {
     return expiresAt === null ? 'never expires' : `expires ${expiresAt}`;
 }
-function fail(err) {
+// Asks on the terminal; false for anything but y/yes.
+function confirm(question) {
+    return new Promise((resolve) => {
+        const rl = createInterface({ input: process.stdin, output: process.stderr });
+        rl.question(question, (answer) => {
+            rl.close();
+            resolve(/^y(es)?$/i.test(answer.trim()));
+        });
+    });
+}
+function fail(err, hint404) {
     console.error(red(`Error: ${err.message}`));
+    if (hint404 && err instanceof GuiError && err.status === 404)
+        console.error(dim(hint404));
     if (err instanceof GuiError && err.maxExpiresAt) {
         console.error(dim(`This page can't be extended past ${err.maxExpiresAt}. Claim it or use a Pro key to keep it longer.`));
     }
@@ -218,6 +244,32 @@ async function main() {
         }
         catch (err) {
             fail(err);
+        }
+        process.exit(0);
+    }
+    if (opts.command === 'delete') {
+        if (!opts.id) {
+            console.error(red('Error: gui delete requires a canvas ID'));
+            process.exit(1);
+        }
+        if (!opts.yes) {
+            // Only ask a person. A script or agent has to say --yes, so a delete
+            // never happens because nothing was there to answer.
+            if (!process.stdin.isTTY || !process.stderr.isTTY) {
+                console.error(red('Error: gui delete needs --yes when it is not run from a terminal'));
+                process.exit(1);
+            }
+            if (!(await confirm(`Delete ${opts.id} for good? This can't be undone. [y/N] `))) {
+                console.error(dim('Not deleted.'));
+                process.exit(1);
+            }
+        }
+        try {
+            const data = await deleteCanvas(config, opts.id, { token: opts.token });
+            console.log(opts.json ? JSON.stringify(data, null, 2) : `Deleted ${data.id}`);
+        }
+        catch (err) {
+            fail(err, "No page with that ID, or the token or key doesn't match it.");
         }
         process.exit(0);
     }

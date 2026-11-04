@@ -47,6 +47,12 @@ gui extend abc123
 # Choose a new expiry with the page's edit token (from gui push --json)
 gui extend abc123 --token <edit_token> --expires 7d
 
+# Delete a page for good (asks first on a terminal)
+gui delete abc123 --token <edit_token>
+
+# Delete from a script or agent
+gui delete abc123 --token <edit_token> --yes
+
 # Open an existing canvas
 gui open abc123
 ```
@@ -71,6 +77,14 @@ requests are capped to your plan's limit rather than rejected:
 past 72h after it was created. With `--token`, `--expires` sets the new expiry
 measured from now, capped the same way.
 
+## Deleting
+
+`gui delete <id>` removes the page for good. It needs the page's edit token
+(`--token`), or `GUI_NOW_API_KEY` set to an API key of the account that owns
+the page. On a terminal it asks before deleting; from a script or agent it
+won't delete unless you pass `--yes`. If the page doesn't exist or the token
+or key doesn't match it, you get the same "not found" error either way.
+
 ## Options
 
 | Flag | Short | Description |
@@ -79,7 +93,8 @@ measured from now, capped the same way.
 | `--expires` | `-e` | Expiry: a duration like `24h` or `7d`, or `never` |
 | `--markdown` | `-m` | Treat input as markdown |
 | `--agent` | `-a` | Agent publishing the page, shown in the library |
-| `--token` | | Edit token, for `gui extend --expires` |
+| `--token` | | Edit token, for `gui extend --expires` and `gui delete` |
+| `--yes` | `-y` | Delete without asking |
 | `--open` | `-o` | Open URL in browser after creation |
 | `--json` | `-j` | Output full JSON response |
 | `--help` | `-h` | Show help |

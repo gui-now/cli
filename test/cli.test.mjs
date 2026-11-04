@@ -175,3 +175,66 @@ test('help lists extend and the v2 expiry options', async () => {
   assert.match(r.stdout, /never/)
   assert.match(r.stdout, /GUI_NOW_BASE_URL/)
 })
+
+test('delete with --token and --yes sends DELETE with the edit token', async () => {
+  respond = () => ({ status: 200, body: { id: 'abc', deleted: true } })
+  const r = await run(['delete', 'abc', '--token', 'tok', '--yes'])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(r.stdout, 'Deleted abc\n')
+  const [req] = requests
+  assert.equal(req.method, 'DELETE')
+  assert.equal(req.url, '/api/canvas/abc')
+  assert.equal(req.headers.authorization, 'Bearer tok')
+  assert.equal(req.headers['x-gui-client'], 'gui-now')
+  assert.equal(req.body, undefined)
+})
+
+test('delete with an account key and no token sends only the key', async () => {
+  respond = () => ({ status: 200, body: { id: 'abc', deleted: true } })
+  const r = await run(['delete', 'abc', '-y', '--json'], { env: { GUI_NOW_API_KEY: 'gui_live_k1' } })
+  assert.equal(r.code, 0, r.stderr)
+  assert.deepEqual(JSON.parse(r.stdout), { id: 'abc', deleted: true })
+  const [req] = requests
+  assert.equal(req.headers['x-api-key'], 'gui_live_k1')
+  assert.equal(req.headers.authorization, undefined)
+})
+
+test('delete off a terminal needs --yes and never calls the API without it', async () => {
+  const r = await run(['delete', 'abc', '--token', 'tok'])
+  assert.equal(r.code, 1)
+  assert.match(r.stderr, /--yes/)
+  assert.equal(requests.length, 0)
+})
+
+test('delete without a token or account key fails before calling the API', async () => {
+  for (const env of [{}, { GUI_NOW_API_KEY: 'pro_legacy_key' }]) {
+    const r = await run(['delete', 'abc', '--yes'], { env })
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /--token <edit_token>/)
+    assert.match(r.stderr, /gui_live_/)
+  }
+  assert.equal(requests.length, 0)
+})
+
+test('delete of a missing page, or with the wrong token, says both and exits 1', async () => {
+  respond = () => ({ status: 404, body: { error: 'Canvas not found' } })
+  const r = await run(['delete', '../x?y', '--token', 'bad', '--yes'])
+  assert.equal(r.code, 1)
+  assert.equal(requests[0].url, '/api/canvas/..%2Fx%3Fy')
+  assert.match(r.stderr, /Canvas not found/)
+  assert.match(r.stderr, /token/)
+  assert.equal(r.stdout, '')
+})
+
+test('delete needs an id', async () => {
+  const r = await run(['delete', '--yes'])
+  assert.equal(r.code, 1)
+  assert.match(r.stderr, /requires a canvas ID/)
+  assert.equal(requests.length, 0)
+})
+
+test('help lists delete', async () => {
+  const r = await run(['help'])
+  assert.match(r.stdout, /gui delete <id>/)
+  assert.match(r.stdout, /--yes/)
+})

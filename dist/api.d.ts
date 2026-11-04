@@ -17,6 +17,10 @@ export interface Canvas {
     pro?: boolean;
     format?: string;
 }
+export interface DeleteResult {
+    id: string;
+    deleted: boolean;
+}
 export interface ExtendResult {
     id: string;
     /** ISO timestamp, or null when the page never expires. */
@@ -59,3 +63,15 @@ export interface ExtendOptions {
     expires?: string;
 }
 export declare function extendCanvas(config: ClientConfig, id: string, opts?: ExtendOptions): Promise<ExtendResult>;
+/** True for the account keys made at gui.now/account, which can act as their owner. */
+export declare function isAccountKey(key: string | undefined): boolean;
+export interface DeleteOptions {
+    /** The page's edit token. Without it, the account key in config must own the page. */
+    token?: string;
+}
+/**
+ * Deletes a page for good. The edit token decides when it's sent; otherwise
+ * the API checks that the account key belongs to the page's owner. A wrong
+ * token and a missing page both come back as 404.
+ */
+export declare function deleteCanvas(config: ClientConfig, id: string, opts?: DeleteOptions): Promise<DeleteResult>;

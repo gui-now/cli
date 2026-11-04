@@ -24,6 +24,11 @@ export interface Canvas {
   format?: string
 }
 
+export interface DeleteResult {
+  id: string
+  deleted: boolean
+}
+
 export interface ExtendResult {
   id: string
   /** ISO timestamp, or null when the page never expires. */
@@ -137,4 +142,32 @@ export async function extendCanvas(config: ClientConfig, id: string, opts: Exten
     ...(opts.expires ? { body: JSON.stringify({ expires: opts.expires }) } : {}),
   })
   return check<ExtendResult>(res)
+}
+
+/** True for the account keys made at gui.now/account, which can act as their owner. */
+export function isAccountKey(key: string | undefined): boolean {
+  return !!key && key.startsWith('gui_live_')
+}
+
+export interface DeleteOptions {
+  /** The page's edit token. Without it, the account key in config must own the page. */
+  token?: string
+}
+
+/**
+ * Deletes a page for good. The edit token decides when it's sent; otherwise
+ * the API checks that the account key belongs to the page's owner. A wrong
+ * token and a missing page both come back as 404.
+ */
+export async function deleteCanvas(config: ClientConfig, id: string, opts: DeleteOptions = {}): Promise<DeleteResult> {
+  if (!opts.token && !isAccountKey(config.apiKey)) {
+    throw new Error('delete needs --token <edit_token>, or GUI_NOW_API_KEY set to one of your gui_live_ account keys')
+  }
+  const extra: Record<string, string> = {}
+  if (opts.token) extra.Authorization = `Bearer ${opts.token}`
+  const res = await fetch(`${config.baseUrl || DEFAULT_BASE_URL}/api/canvas/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: headers(config, extra),
+  })
+  return check<DeleteResult>(res)
 }

@@ -86,3 +86,25 @@ export async function extendCanvas(config, id, opts = {}) {
     });
     return check(res);
 }
+/** True for the account keys made at gui.now/account, which can act as their owner. */
+export function isAccountKey(key) {
+    return !!key && key.startsWith('gui_live_');
+}
+/**
+ * Deletes a page for good. The edit token decides when it's sent; otherwise
+ * the API checks that the account key belongs to the page's owner. A wrong
+ * token and a missing page both come back as 404.
+ */
+export async function deleteCanvas(config, id, opts = {}) {
+    if (!opts.token && !isAccountKey(config.apiKey)) {
+        throw new Error('delete needs --token <edit_token>, or GUI_NOW_API_KEY set to one of your gui_live_ account keys');
+    }
+    const extra = {};
+    if (opts.token)
+        extra.Authorization = `Bearer ${opts.token}`;
+    const res = await fetch(`${config.baseUrl || DEFAULT_BASE_URL}/api/canvas/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: headers(config, extra),
+    });
+    return check(res);
+}
