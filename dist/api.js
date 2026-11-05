@@ -53,10 +53,19 @@ async function check(res) {
 }
 export async function createCanvas(config, content, opts = {}) {
     const body = {};
+    if (opts.markdown && opts.mermaid)
+        throw new Error('pick one of --markdown or --mermaid');
+    if (opts.theme !== undefined && opts.theme !== 'dark' && opts.theme !== 'light') {
+        throw new Error('--theme must be dark or light');
+    }
     if (opts.markdown)
         body.markdown = content;
+    else if (opts.mermaid)
+        body.mermaid = content;
     else
         body.html = content;
+    if (opts.theme)
+        body.theme = opts.theme;
     if (opts.title)
         body.title = opts.title;
     if (opts.expires)
@@ -66,6 +75,41 @@ export async function createCanvas(config, content, opts = {}) {
     const res = await fetch(`${config.baseUrl || DEFAULT_BASE_URL}/api/canvas`, {
         method: 'POST',
         headers: headers(config),
+        body: JSON.stringify(body),
+    });
+    return check(res);
+}
+/**
+ * Changes a page's body and/or title. Only the fields given are sent, so the
+ * password and expiry stay as they are. Rejects anything the API would turn
+ * away (or silently ignore) before calling it.
+ */
+export async function updateCanvas(config, id, opts) {
+    if (!opts.token) {
+        throw new Error('update needs --token <edit_token>, or GUI_NOW_EDIT_TOKEN set to it');
+    }
+    const format = opts.format ?? 'html';
+    if (opts.theme !== undefined) {
+        if (opts.theme !== 'dark' && opts.theme !== 'light') {
+            throw new Error('--theme must be dark or light');
+        }
+        if (format === 'html' || opts.content === undefined) {
+            throw new Error('--theme only applies with --markdown or --mermaid and new content');
+        }
+    }
+    const body = {};
+    if (opts.content !== undefined)
+        body[format] = opts.content;
+    if (opts.theme !== undefined)
+        body.theme = opts.theme;
+    if (opts.title !== undefined)
+        body.title = opts.title;
+    if (Object.keys(body).length === 0) {
+        throw new Error('Nothing to update. Pipe new content, pass a file, or use --title.');
+    }
+    const res = await fetch(`${config.baseUrl || DEFAULT_BASE_URL}/api/canvas/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: headers(config, { Authorization: `Bearer ${opts.token}` }),
         body: JSON.stringify(body),
     });
     return check(res);
