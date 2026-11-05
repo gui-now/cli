@@ -16,6 +16,23 @@ export interface Canvas {
     owned?: boolean;
     pro?: boolean;
     format?: string;
+    /** Fingerprint of what the page serves ("sha256:<hex>"), same as X-Content-Hash on /embed/<id>. */
+    content_hash?: string;
+}
+export interface UpdateResult {
+    id: string;
+    updated: boolean;
+    /** Fields this update changed, e.g. ["html", "title"]. */
+    changed: string[];
+    /** Fields in the request the API didn't apply. */
+    ignored?: string[];
+    /** "markdown", "mermaid", "components" or "html" when the body changed format. */
+    format?: string;
+    /** Fingerprint of what the page now serves; /embed/<id> sends it as X-Content-Hash. */
+    content_hash?: string;
+    edit_count?: number;
+    /** Free pages only: edits left. */
+    edits_remaining?: number;
 }
 export interface DeleteResult {
     id: string;
@@ -52,10 +69,31 @@ export interface CreateOptions {
     /** "30m", "24h", "7d" or "never". The server clamps to the caller's tier max. */
     expires?: string;
     markdown?: boolean;
+    /** Send the content as a Mermaid diagram. */
+    mermaid?: boolean;
+    /** "dark" or "light" for markdown or mermaid. Leave it out to follow the viewer. */
+    theme?: string;
     /** Name of the agent publishing, e.g. "Claude Code". A label, never auth. */
     agent?: string;
 }
 export declare function createCanvas(config: ClientConfig, content: string, opts?: CreateOptions): Promise<Canvas>;
+export type BodyFormat = 'html' | 'markdown' | 'mermaid';
+export interface UpdateOptions {
+    /** The page's edit token. Required: account and agent keys can't update by key. */
+    token?: string;
+    /** The new body, sent as `format`. Leave it out to change only the title. */
+    content?: string;
+    format?: BodyFormat;
+    /** "dark" or "light" for a markdown or mermaid body. Leave it out to follow the viewer. */
+    theme?: string;
+    title?: string;
+}
+/**
+ * Changes a page's body and/or title. Only the fields given are sent, so the
+ * password and expiry stay as they are. Rejects anything the API would turn
+ * away (or silently ignore) before calling it.
+ */
+export declare function updateCanvas(config: ClientConfig, id: string, opts: UpdateOptions): Promise<UpdateResult>;
 export interface ExtendOptions {
     /** The page's edit token. Needed to choose a specific expiry. */
     token?: string;

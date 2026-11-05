@@ -41,6 +41,12 @@ gui push index.html --expires 7d
 # Say which agent made the page (shown in your library)
 gui push index.html --agent "Claude Code"
 
+# Replace a page's content with Markdown, using its edit token
+gui update abc123 notes.md --markdown --token <edit_token>
+
+# Or pipe it in and rename the page in the same edit
+cat notes.md | gui update abc123 --markdown --title "Release notes" --token <edit_token>
+
 # Push an existing page's expiry forward by 24h
 gui extend abc123
 
@@ -77,6 +83,19 @@ requests are capped to your plan's limit rather than rejected:
 past 72h after it was created. With `--token`, `--expires` sets the new expiry
 measured from now, capped the same way.
 
+## Updating
+
+`gui update <id> [file]` replaces the page's content with the file or piped
+input, and changes the title if you pass `--title`. Send it as HTML (the
+default), `--markdown` or `--mermaid`; `--theme dark` or `--theme light` sets the
+theme for Markdown and Mermaid, and without it the page follows the viewer's
+setting. It needs the page's edit token, from `--token` or `GUI_NOW_EDIT_TOKEN`.
+
+The password and expiry stay as they are. To change when a page expires, use
+`gui extend`. The URL goes to stdout; what changed and the new `content_hash`
+go to stderr. `/embed/<id>` sends the same hash as the `X-Content-Hash` header,
+so you can confirm what's live. Free pages allow 3 edits.
+
 ## Deleting
 
 `gui delete <id>` removes the page for good. It needs the page's edit token
@@ -92,8 +111,10 @@ or key doesn't match it, you get the same "not found" error either way.
 | `--title` | `-t` | Canvas title |
 | `--expires` | `-e` | Expiry: a duration like `24h` or `7d`, or `never` |
 | `--markdown` | `-m` | Treat input as markdown |
+| `--mermaid` | | Treat input as a Mermaid diagram |
+| `--theme` | | `dark` or `light` for Markdown and Mermaid |
 | `--agent` | `-a` | Agent publishing the page, shown in the library |
-| `--token` | | Edit token, for `gui extend --expires` and `gui delete` |
+| `--token` | | Edit token, for `gui update`, `gui extend --expires` and `gui delete` |
 | `--yes` | `-y` | Delete without asking |
 | `--open` | `-o` | Open URL in browser after creation |
 | `--json` | `-j` | Output full JSON response |
@@ -105,6 +126,7 @@ or key doesn't match it, you get the same "not found" error either way.
 |----------|-------------|
 | `GUI_NOW_API_KEY` | Pro API key for higher rate limits (100/hr vs 5/hr) and longer expiry |
 | `GUI_NOW_AGENT` | Default for `--agent` |
+| `GUI_NOW_EDIT_TOKEN` | Default for `--token` on `gui update` |
 | `GUI_NOW_BASE_URL` | API base URL, for a preview or local deploy (default `https://gui.now`) |
 
 ## Requirements

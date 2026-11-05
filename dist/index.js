@@ -2,7 +2,7 @@
 import { readFileSync } from 'fs';
 import { createInterface } from 'readline';
 import { execFile } from 'child_process';
-import { configFromEnv, createCanvas, deleteCanvas, extendCanvas, GuiError } from './api.js';
+import { configFromEnv, createCanvas, deleteCanvas, extendCanvas, GuiError, updateCanvas } from './api.js';
 const config = configFromEnv();
 const isTTY = process.stdout.isTTY ?? false;
 // Simple ANSI colors (only when TTY)
@@ -16,6 +16,7 @@ ${bold('gui')} — pipe HTML to gui.now, get a shareable URL
 
 ${bold('USAGE')}
   gui push [file] [options]    Create a canvas
+  gui update <id> [file]       Replace a canvas's content or title
   gui extend <id> [options]    Push a canvas's expiry forward
   gui delete <id> [options]    Delete a canvas for good
   gui open <id>                Open a canvas in the browser
@@ -26,6 +27,7 @@ ${bold('EXAMPLES')}
   gui push index.html --title "My Dashboard"
   gui push --markdown README.md
   echo "<h1>Hello</h1>" | gui push --open
+  gui update abc123 notes.md --markdown --token <edit_token>
   gui extend abc123
   gui extend abc123 --token <edit_token> --expires 7d
   gui delete abc123 --token <edit_token>
@@ -35,10 +37,21 @@ ${bold('OPTIONS')}
   -e, --expires <dur>     Expiry like 30m, 24h, 7d, or never. Capped by plan:
                           no account 72h, free account 7d, Pro key no limit
   -m, --markdown          Treat input as markdown
+  --mermaid               Treat input as a Mermaid diagram
+  --theme <dark|light>    Theme for --markdown or --mermaid; leave it out to
+                          follow the viewer's setting
   -a, --agent <name>      Agent publishing the page, shown in the library
   -o, --open              Open URL in browser after creation
   -j, --json              Output full JSON response
   -h, --help              Show help
+
+${bold('UPDATE')}
+  Replaces the page's content with the file or piped input, and/or its title.
+  The password and expiry stay as they are; use gui extend for expiry. Prints
+  the URL on stdout and what changed plus the new content_hash on stderr. The
+  same hash comes back as X-Content-Hash on /embed/<id>. Free pages allow 3 edits.
+  --token <edit_token>    The edit_token from gui push --json, or set
+                          GUI_NOW_EDIT_TOKEN
 
 ${bold('EXTEND')}
   Without --token, extend adds 24h (pages without an owner stop at 72h after
@@ -54,6 +67,7 @@ ${bold('DELETE')}
 ${bold('ENVIRONMENT')}
   GUI_NOW_API_KEY          Pro or gui_live_ account key
   GUI_NOW_AGENT            Default for --agent
+  GUI_NOW_EDIT_TOKEN       Default for --token on gui update
   GUI_NOW_BASE_URL         API base URL (default https://gui.now)
 `);
 }
@@ -65,7 +79,9 @@ function parseArgs(argv) {
         expires: undefined,
         agent: undefined,
         token: undefined,
+        theme: undefined,
         markdown: false,
+        mermaid: false,
         json: false,
         open: false,
         yes: false,
@@ -97,9 +113,15 @@ function parseArgs(argv) {
             case '--token':
                 result.token = args[++i];
                 break;
+            case '--theme':
+                result.theme = args[++i];
+                break;
             case '-m':
             case '--markdown':
                 result.markdown = true;
+                break;
+            case '--mermaid':
+                result.mermaid = true;
                 break;
             case '-j':
             case '--json':
@@ -118,8 +140,16 @@ function parseArgs(argv) {
                 result.help = true;
                 break;
             default:
-                // Positional: file or id
-                if (!result.file && !result.id && !arg.startsWith('-')) {
+                // Positional: file or id. update takes both, id first.
+                if (arg.startsWith('-'))
+                    break;
+                if (result.command === 'update') {
+                    if (!result.id)
+                        result.id = arg;
+                    else if (!result.file)
+                        result.file = arg;
+                }
+                else if (!result.file && !result.id) {
                     if (result.command === 'open' || result.command === 'extend' || result.command === 'delete') {
                         result.id = arg;
                     }
@@ -273,6 +303,69 @@ async function main() {
         }
         process.exit(0);
     }
+    if (opts.command === 'update') {
+        if (!opts.id) {
+            console.error(red('Error: gui update requires a canvas ID'));
+            process.exit(1);
+        }
+        if (opts.expires !== undefined) {
+            console.error(red('Error: gui update never changes expiry. Use gui extend <id> --token <edit_token> --expires <dur>.'));
+            process.exit(1);
+        }
+        if (opts.markdown && opts.mermaid) {
+            console.error(red('Error: pick one of --markdown or --mermaid'));
+            process.exit(1);
+        }
+        const token = opts.token || process.env.GUI_NOW_EDIT_TOKEN || undefined;
+        let content = '';
+        if (opts.file) {
+            try {
+                content = readFileSync(opts.file, 'utf-8');
+            }
+            catch {
+                console.error(red(`Error: Cannot read file '${opts.file}'`));
+                process.exit(1);
+            }
+        }
+        else if (token) {
+            // No token means the update will fail anyway; don't wait on stdin for it.
+            try {
+                content = await readStdin();
+            }
+            catch (err) {
+                console.error(red(`Error: Cannot read stdin — ${err.message}`));
+                process.exit(1);
+            }
+        }
+        try {
+            const data = await updateCanvas(config, opts.id, {
+                token,
+                content: content.trim() ? content : undefined,
+                format: opts.markdown ? 'markdown' : opts.mermaid ? 'mermaid' : 'html',
+                theme: opts.theme,
+                title: opts.title,
+            });
+            if (opts.json) {
+                console.log(JSON.stringify(data, null, 2));
+            }
+            else {
+                // Same split as push: only the URL on stdout.
+                console.log(green(`${config.baseUrl}/${encodeURIComponent(data.id || opts.id)}`));
+                console.error(dim(data.changed?.length ? `Changed: ${data.changed.join(', ')}` : 'Nothing changed.'));
+                if (data.ignored?.length)
+                    console.error(dim(`Ignored: ${data.ignored.join(', ')}`));
+                if (data.content_hash)
+                    console.error(dim(`content_hash ${data.content_hash}`));
+                if (typeof data.edits_remaining === 'number') {
+                    console.error(dim(`${data.edits_remaining} edit${data.edits_remaining === 1 ? '' : 's'} left`));
+                }
+            }
+        }
+        catch (err) {
+            fail(err, "No page with that ID.");
+        }
+        process.exit(0);
+    }
     if (opts.command === 'push') {
         let content = '';
         if (opts.file) {
@@ -304,6 +397,8 @@ async function main() {
                 title: opts.title,
                 expires: opts.expires,
                 markdown: opts.markdown,
+                mermaid: opts.mermaid,
+                theme: opts.theme,
                 agent: opts.agent || process.env.GUI_NOW_AGENT || undefined,
             });
             if (opts.json) {
